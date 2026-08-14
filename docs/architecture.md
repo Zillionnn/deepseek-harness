@@ -24,6 +24,8 @@ Each declares itself in its own `package.json` under a `dsh` field: `dsh.profile
 
 [`dsh-base`](../packages/bundle/base/README.md) is the first layer of every profile: model adapters, tools, persistence, sandbox and approval policy, settings, credentials, telemetry. [`dsh-web-app`](../packages/bundle/web-app/README.md) adds the browser application; [`dsh-headless`](../packages/bundle/headless/README.md) adds a one-shot runner with no server at all.
 
+[`dsh-desktop`](../packages/desktop/app/README.md) is a carrier on the same wire: a Tauri application that spawns the web profile as a hidden child process and hosts the browser surface in a native window, giving the product a double-click, no-console entry point ([Agent Note](../.agents/notes/implemented/architecture/2026-08-14-desktop-shell-tauri.md)).
+
 Layers apply to an empty entry list in this order: each bundle in the profile's listed order, then the profile's `cordis.patch.yml`, then the home-level one, then any `--patch` overlay. A patch targets a row by id and replaces its whole config, or inserts new rows.
 
 To see the tree your machine actually boots:

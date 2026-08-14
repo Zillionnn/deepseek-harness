@@ -1,0 +1,15 @@
+{
+  "name": "@deepseek-ai/dsh-desktop",
+  "description": "Tauri desktop shell: a double-click, no-console host for the DeepSeek Harness browser surface",
+  "version": "0.1.0-rc.5",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

@@ -244,6 +244,7 @@
     { "path": "./packages/bundle/web-app" },
     { "path": "./packages/boot/app-boot" },
     { "path": "./packages/boot/cmdline" },
+    { "path": "./packages/desktop/app" },
     { "path": "./packages/sdk/server" },
     { "path": "./packages/examples/jsonrpc-demo" },
     { "path": "./packages/test-support/llm-replay" },
