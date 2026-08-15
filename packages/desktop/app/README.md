@@ -33,6 +33,10 @@ The repository root is resolved at compile time from the Cargo manifest location
 
 `DEEPSEEK_API_KEY` and any other backend configuration come from the repository-root `.env` or the in-app settings UI, exactly as with `pnpm dsh --profile web`.
 
+The backend reads the same per-user configuration as `pnpm dsh --profile web`: the optional `$DSH_HOME/cordis.patch.yml` (a top-level YAML array of loader patch rows, no wrapper object) overrides profile composition, and `$DSH_HOME/.agent-presets/<id>/agent.cordis.yml` defines per-session agent presets. The settings page's plugin list is a read-only view of the loaded composition; enabling or disabling a plugin means patching its composition row (`- id: <row-id>` with `disabled: true/false`), never a UI toggle.
+
+Custom skills: `skill-filesystem` discovers only one directory level (`<root>/<name>/SKILL.md`), so a nested `~/.agents/skills/<category>/<name>/SKILL.md` layout needs each category directory listed in `Config.customSkillDirs` on the preset's `skill-filesystem` row. A writable preset must use an id that does not collide with a shipped preset id (`standard`, `minimal`, `cordis`, `code`): preset roots resolve first-root-wins, so a same-named copy in the user root is silently shadowed. The working recipe is a `desktop` preset copied from the shipped `standard` file with `customSkillDirs` added, plus a `$DSH_HOME/cordis.patch.yml` row `- id: agent-presets` with `config.default: desktop`; sessions created afterwards mount it, while sessions already joined keep the generation they started on.
+
 ## Known Limitations and Deferred Work
 
 - **Windows-only v1** — the code keeps non-Windows `cfg` branches, but only Windows is built and exercised.
