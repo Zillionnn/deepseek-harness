@@ -80,6 +80,7 @@ pub fn backend_args(spec: &BackendSpec) -> Vec<String> {
         "web".to_string(),
         "--port".to_string(),
         "0".to_string(),
+        "--no-open".to_string(),
     ]
 }
 
@@ -170,7 +171,8 @@ mod tests {
                 "--profile",
                 "web",
                 "--port",
-                "0"
+                "0",
+                "--no-open"
             ]
         );
     }

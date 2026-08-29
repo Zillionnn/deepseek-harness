@@ -6,7 +6,7 @@ The shell is a carrier on the existing wire, not a Cordis plugin: the web surfac
 
 ## How it works
 
-- `node <repo>/apps/cli/lib/bin.js --profile web --port 0` runs with the repository root as its working directory, `CREATE_NO_WINDOW` on Windows, stdin null, and stdout/stderr piped. `--port 0` lets the OS pick a free port; `printUrl` is `true` by default, so the backend prints `dsh web: http://127.0.0.1:<port>` once its Loader tree settles.
+- `node <repo>/apps/cli/lib/bin.js --profile web --port 0 --no-open` runs with the repository root as its working directory, `CREATE_NO_WINDOW` on Windows, stdin null, and stdout/stderr piped. `--port 0` lets the OS pick a free port; `--no-open` prevents the backend from opening the default browser (the shell hosts the URL in its own WebView2 window). `printUrl` is `true` by default, so the backend prints `dsh web: http://127.0.0.1:<port>` once its Loader tree settles.
 - The shell reads stdout until that line, opens the main window on the URL, then keeps draining both pipes. stderr is kept as a capped tail for the error dialog.
 - Single instance: a second launch focuses the existing window. Closing the window kills the backend process tree (`taskkill /PID <pid> /T /F`); session data is append-only per event, so a hard kill loses no committed data. A backend exit without a user close shows a dialog with the stderr tail and the exit code.
 - The shell's release build carries `windows_subsystem = "windows"`; the backend never shares a console.

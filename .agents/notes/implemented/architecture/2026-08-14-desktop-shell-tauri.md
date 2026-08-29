@@ -16,7 +16,7 @@ The harness's only interactive GUI is the browser surface: starting it means typ
 
 ### Backend child process and the stdout handshake
 
-The shell spawns `node <repo>/apps/cli/lib/bin.js --profile web --port 0` with `current_dir` = the repo root, `CREATE_NO_WINDOW` on Windows, stdin null, and stdout/stderr piped. `--port 0` lets the OS pick a free port; `printUrl` is `true` by default in the web-app bundle, so the backend prints `dsh web: http://127.0.0.1:<port>` (possibly with a ` (LAN: ...)` suffix) on stdout once its Loader tree settles. The shell reads stdout lines until the URL line, loads that URL in the main window, then keeps draining stdout to EOF. stderr is drained into a capped tail buffer that the error dialog includes when the backend dies.
+The shell spawns `node <repo>/apps/cli/lib/bin.js --profile web --port 0 --no-open` with `current_dir` = the repo root, `CREATE_NO_WINDOW` on Windows, stdin null, and stdout/stderr piped. `--port 0` lets the OS pick a free port; `--no-open` prevents the backend from opening the default browser (the shell hosts the URL in its own WebView2 window). `printUrl` is `true` by default in the web-app bundle, so the backend prints `dsh web: http://127.0.0.1:<port>` (possibly with a ` (LAN: ...)` suffix) on stdout once its Loader tree settles. The shell reads stdout lines until the URL line, loads that URL in the main window, then keeps draining stdout to EOF. stderr is drained into a capped tail buffer that the error dialog includes when the backend dies.
 
 The shell and the backend must not share a console: the backend is spawned with `CREATE_NO_WINDOW`, and the shell's release build carries `windows_subsystem = "windows"`.
 

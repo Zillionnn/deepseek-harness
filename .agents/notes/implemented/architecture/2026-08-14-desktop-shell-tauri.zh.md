@@ -16,7 +16,7 @@ harness 唯一的交互式 GUI 是浏览器 surface:启动它需要在终端里�
 
 ### 后端子进程与 stdout 握手
 
-壳以 `current_dir` = 仓库根、Windows 上带 `CREATE_NO_WINDOW`、stdin 置 null、stdout/stderr 管道化的方式 spawn `node <repo>/apps/cli/lib/bin.js --profile web --port 0`。`--port 0` 让 OS 选空闲端口;web-app bundle 默认 `printUrl: true`,所以后端在其 Loader 树安定后会在 stdout 打印 `dsh web: http://127.0.0.1:<port>`(可能带 ` (LAN: ...)` 后缀)。壳读 stdout 行直到 URL 行出现,把该 URL 载入主窗口,然后继续把 stdout 读到 EOF 以免管道阻塞。stderr 被排进一个有上限的尾部缓冲,后端死亡时错误对话框会带上它。
+壳以 `current_dir` = 仓库根、Windows 上带 `CREATE_NO_WINDOW`、stdin 置 null、stdout/stderr 管道化的方式 spawn `node <repo>/apps/cli/lib/bin.js --profile web --port 0 --no-open`。`--port 0` 让 OS 选空闲端口;`--no-open` 阻止后端打开默认浏览器(壳自己用 WebView2 托管 URL)。web-app bundle 默认 `printUrl: true`,所以后端在其 Loader 树安定后会在 stdout 打印 `dsh web: http://127.0.0.1:<port>`(可能带 ` (LAN: ...)` 后缀)。壳读 stdout 行直到 URL 行出现,把该 URL 载入主窗口,然后继续把 stdout 读到 EOF 以免管道阻塞。stderr 被排进一个有上限的尾部缓冲,后端死亡时错误对话框会带上它。
 
 壳与后端不得共享控制台:后端用 `CREATE_NO_WINDOW` 拉起,壳的 release 构建带 `windows_subsystem = "windows"`。
 
