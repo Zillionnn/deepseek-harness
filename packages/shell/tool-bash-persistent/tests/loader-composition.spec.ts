@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import AgentRegistry, { Inbox } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -84,7 +84,10 @@ suite('persistent Bash through a real cordis.yml Loader composition', () => {
       '  config:',
       '    pollIntervalMs: 10',
       '    exactProbeAfterMs: 20',
-      '    idleSilenceMs: 100',
+      // The silence tier is pushed beyond the send bound, so no send below can
+      // settle as inferred_idle: every case proves the controlled-prompt fast
+      // path that the production defaults (3.5s silence) would otherwise mask.
+      '    idleSilenceMs: 30000',
       '    handoffGraceMs: 100',
       '    scrollbackLines: 20000',
       '    timeoutMs: 2000',
@@ -124,7 +127,7 @@ suite('persistent Bash through a real cordis.yml Loader composition', () => {
     const signal = new AbortController().signal
     const execute = (id: string, command: string) => context!.tools.execute({
       signal,
-      callId: CallId(id),
+      callId: ToolCallId(id),
       name: 'bash',
       arguments: { command },
       agent: owner,
@@ -149,10 +152,22 @@ suite('persistent Bash through a real cordis.yml Loader composition', () => {
     ))
     expect(heredoc).toBe('alpha\nbeta')
 
+    const pipeline = text(await execute(
+      'pipeline',
+      '{ sleep 0.1; printf "delayed\\n"; } | cat',
+    ))
+    expect(pipeline).toBe('delayed')
+
     const large = text(await execute('large-output', 'seq 1 12050'))
     expect(large.startsWith('1\n2\n3\n')).toBe(true)
     expect(large).toContain('<response clipped>')
     expect(large).not.toContain('beginning of this command output was dropped')
+
+    // `exec` replaces the wrapper before its end marker prints; the seam's
+    // stdin_read readiness is what returns the replacement shell's prompt
+    // instead of spinning until the tool deadline.
+    const execed = text(await execute('exec-replacement', 'exec bash --noprofile --norc -i'))
+    expect(execed).toBe('dsh> ')
 
     const exited = text(await execute('exit', 'exit'))
     expect(exited).toContain('next bash call starts from the workspace')

@@ -15,9 +15,6 @@
       "path": "../../../vendor/cordis"
     },
     {
-      "path": "../runtime"
-    },
-    {
       "path": "../locale"
     },
     {
@@ -27,10 +24,13 @@
       "path": "../ui-primitives"
     },
     {
-      "path": "../ui-slots"
+      "path": "../ui-renderer"
     },
     {
-      "path": "../web-react"
+      "path": "../ui-session"
+    },
+    {
+      "path": "../ui-slots"
     },
     {
       "path": "../../plan/plan-mode"

@@ -13,15 +13,17 @@
  * The General-settings row separately writes the default preset for sessions
  * created later through the host Settings API.
  */
-import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: the settings slot types (this package registers a General row).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 // Type-only: pulls the ctx.remote merge and the forwarded-event key face
 // (the settings invalidation rides the allowlist) into this program.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
-import type { ClientContext, SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
 import type { CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type { PermissionSelect } from '@deepseek-ai/dsh-permission-presets/client'
@@ -33,9 +35,7 @@ import {
 import {
   displayPermissionPreset, FULL_ACCESS_PRESET,
 } from './presentation.ts'
-import {
-  PERMISSION_SETTINGS_NS, PermissionPresetSettingsController, refreshPermissionIfLoaded,
-} from './settings-store.ts'
+import { PermissionPresetSettingsController } from './settings-store.ts'
 
 export type { PermissionRowInjected, PermissionRowProps } from './PermissionRow.tsx'
 export type {
@@ -43,7 +43,10 @@ export type {
 } from './settings-store.ts'
 
 /** Required services (cordis fiber inject). */
-export const inject = ['commandUi', 'sessions', 'slots', 'locale', 'connection', 'remote']
+export const inject = [
+  'commandUi', 'sessions', 'slots', 'locale', 'remote', 'remote.settings',
+  'settingsScope', 'settingsSchema',
+]
 
 const ACCESS_NS = 'permission.access'
 
@@ -112,8 +115,9 @@ export function apply(ctx: ClientContext): void {
 
   ctx.effect(() => ctx.locale.register('settings.permission', { zh, en }), 'ui-permission: settings row dictionaries')
 
-  const connection = ctx.get('connection') as ConnectionHandle
-  const controller = new PermissionPresetSettingsController(connection.api)
+  // The shared SettingsScope mirror updates after document commits and reconnects.
+  const controller = new PermissionPresetSettingsController(
+    ctx.settingsScope.describe(), { settings: ctx.remote.settings }, ctx.settingsSchema)
   const load = (): Promise<void> => controller.load()
   const select = (preset: string): Promise<void> => controller.select(preset)
   const injected = (): PermissionRowInjected => ({
@@ -122,20 +126,7 @@ export function apply(ctx: ClientContext): void {
     select,
   })
 
-  ctx.effect(() => {
-    const refresh = (): void => { refreshPermissionIfLoaded(controller) }
-    const disposers = [
-      ctx.remote.$on('settings/document-updated', (ns) => {
-        if (ns !== PERMISSION_SETTINGS_NS) return
-        refresh()
-      }),
-      ctx.on('connection/reset', () => { refresh() }),
-    ]
-    return () => {
-      controller.dispose()
-      for (const dispose of disposers) dispose()
-    }
-  }, 'ui-permission: settings invalidations')
+  ctx.effect(() => () => { controller.dispose() }, 'ui-permission: settings row directory')
 
   ctx.slots.inject('settings.general.item', () => ctx.slots.register({
     name: 'settings.general.item',

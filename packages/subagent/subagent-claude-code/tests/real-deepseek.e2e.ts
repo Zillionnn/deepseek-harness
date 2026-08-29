@@ -7,7 +7,7 @@ import {
   rmSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { Context } from '@deepseek-ai/cordis'
@@ -87,7 +87,6 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)(
       ]) mkdirSync(directory)
 
       const env = {
-        PATH: `${dirname(claudeBin)}${delimiter}${process.env.PATH ?? ''}`,
         ANTHROPIC_AUTH_TOKEN: apiKey,
         ANTHROPIC_BASE_URL: `${deepSeekBaseUrl()}/anthropic`,
         ANTHROPIC_MODEL: 'deepseek-v4-pro[1m]',
@@ -124,13 +123,13 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)(
       })
       await ctx.plugin(claudeCode, { env, disposeGraceMs: 3_000 })
 
-      expect(sdkPackage.version).toBe('0.3.220')
-      expect(sdkPackage.claudeCodeVersion).toBe('2.1.220')
-      expect(sdkPackage.optionalDependencies[platformPackage]).toBe('0.3.220')
+      expect(sdkPackage.version).toBe('0.3.241')
+      expect(sdkPackage.claudeCodeVersion).toBe('2.1.241')
+      expect(sdkPackage.optionalDependencies[platformPackage]).toBe('0.3.241')
       const version = await execFileAsync(claudeBin, ['--version'], {
         env: { ...process.env, ...env },
       })
-      expect(version.stdout.trim()).toBe('2.1.220 (Claude Code)')
+      expect(version.stdout.trim()).toBe('2.1.241 (Claude Code)')
 
       const nonce = `DSH_CLAUDE_DEEPSEEK_${randomUUID()}`
       const parent = {

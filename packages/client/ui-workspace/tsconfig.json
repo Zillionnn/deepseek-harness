@@ -9,6 +9,12 @@
   ],
   "references": [
     {
+      "path": "../../api/session-controller/tsconfig.client.json"
+    },
+    {
+      "path": "../../api/workspace-controller/tsconfig.client.json"
+    },
+    {
       "path": "../locale"
     },
     {
@@ -21,7 +27,16 @@
       "path": "../ui-primitives"
     },
     {
-      "path": "../runtime"
+      "path": "../connection/tsconfig.client.json"
+    },
+    {
+      "path": "../../api/remotes/tsconfig.client.json"
+    },
+    {
+      "path": "../store"
+    },
+    {
+      "path": "../../core/session"
     },
     {
       "path": "../ui-sidebar"
@@ -30,7 +45,16 @@
       "path": "../ui-conversation"
     },
     {
+      "path": "../ui-renderer"
+    },
+    {
+      "path": "../ui-session"
+    },
+    {
       "path": "../../runtime-diagnostics/invariants"
+    },
+    {
+      "path": "../../util/workspace-path"
     }
   ]
 }

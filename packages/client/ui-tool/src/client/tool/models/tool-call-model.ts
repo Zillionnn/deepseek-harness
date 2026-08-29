@@ -2,16 +2,17 @@
  * Pure row-model derivation for tool summary rows: variant classification,
  * one-line summary, expanded-body text, and flattened result output from the
  * frozen call slice. Input material comes from the call ARGUMENTS; output and
- * error material from the settled result node. A call whose render intent is
- * a terminal card gets its expanded body from the views instead, through
- * `terminalCardModel` in terminal-card-model.ts.
+ * error material from the settled result node. A supported terminal call gets
+ * its expanded body from `terminalCardModel` instead.
  */
 // The block union's defining home is runtime (fold-product types); this
 // contract only forwards it (type-definition authority stays with the layer
 // that produces the values).
-import type { ToolCallBlock, ToolResultNode } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ToolCallBlock, ToolResultNode } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { LocaleKeysOf } from '@deepseek-ai/dsh-client-ui-slots'
+import { abbreviateHomePath } from '@deepseek-ai/dsh-util-workspace-path'
 
-export type { ToolCallBlock } from '@deepseek-ai/dsh-client-runtime/client'
+export type { ToolCallBlock } from '@deepseek-ai/dsh-client-ui-chat/client'
 
 /** Tool-call row variants selected by the generic atomic renderer. */
 export type ToolRowVariant = 'search' | 'read' | 'bash' | 'write' | 'edit' | 'code' | 'others'
@@ -19,11 +20,14 @@ export type ToolRowVariant = 'search' | 'read' | 'bash' | 'write' | 'edit' | 'co
 /** Row state semantic; colors self-supplied via StateDot (design gives none). */
 export type ToolRowState = 'running' | 'ok' | 'error' | 'stopped'
 
-/** Figma row titles per variant (design literals, not translatable copy). */
-export const VARIANT_TITLES: Record<ToolRowVariant, string> = {
-  search: 'Search', read: 'Read', bash: 'Bash',
-  write: 'Write', edit: 'Edit', code: 'Code', others: 'Tool call',
-}
+type ToolTitleKey = Extract<LocaleKeysOf<'conversation'>, `tool.title.${string}`>
+
+/** Locale key per generic row variant. */
+export const VARIANT_TITLE_KEYS = {
+  search: 'tool.title.search', read: 'tool.title.read', bash: 'tool.title.bash',
+  write: 'tool.title.write', edit: 'tool.title.edit', code: 'tool.title.code',
+  others: 'tool.title.generic',
+} as const satisfies Record<ToolRowVariant, ToolTitleKey>
 
 /**
  * Known tool name -> variant.
@@ -37,7 +41,7 @@ export const VARIANT_TITLES: Record<ToolRowVariant, string> = {
 const TOOL_VARIANTS: Record<string, ToolRowVariant> = {
   bash: 'bash',
   // The PowerShell twin is a shell tool: the bash row family (icon, colors)
-  // with its own title from TOOL_TITLES, not the generic `others` row.
+  // with its own title from TOOL_TITLE_KEYS, not the generic `others` row.
   pwsh: 'bash',
   read: 'read',
   web_fetch: 'read',
@@ -59,13 +63,13 @@ const TOOL_VARIANTS: Record<string, ToolRowVariant> = {
 }
 
 /** Tool-owned titles that refine a generic row variant without replacing it. */
-const TOOL_TITLES: Record<string, string> = {
-  cordis_package_inspect: 'Inspect',
-  cordis_runtime_inspect: 'Inspect',
-  cordis_run: 'Run Cordis Plugin',
-  cordis_stop: 'Stop Cordis Plugin',
-  cordis_undefine: 'Remove Cordis Plugin',
-  pwsh: 'Pwsh',
+const TOOL_TITLE_KEYS: Record<string, ToolTitleKey> = {
+  cordis_package_inspect: 'tool.title.inspect',
+  cordis_runtime_inspect: 'tool.title.inspect',
+  cordis_run: 'tool.title.runCordis',
+  cordis_stop: 'tool.title.stopCordis',
+  cordis_undefine: 'tool.title.removeCordis',
+  pwsh: 'tool.title.pwsh',
 }
 
 /**
@@ -80,7 +84,7 @@ export function classifyTool(toolName: string): ToolRowVariant {
 /** Everything ToolRow needs, derived once from the frozen slice. */
 export interface ToolRowModel {
   variant: ToolRowVariant
-  title: string
+  titleKey: ToolTitleKey
   summary: string
   /**
    * Filesystem path from args (`path` / `file_path`) when the row is a file
@@ -166,6 +170,10 @@ function deriveSummary(variant: ToolRowVariant, argsRaw: string): string {
   const parsed = parseArgs(argsRaw)
   if (typeof parsed !== 'object' || parsed === null) return firstLine(argsRaw)
   const args = parsed as Record<string, unknown>
+  if (variant === 'search' && Array.isArray(args.queries)) {
+    const queries = args.queries.filter((query): query is string => typeof query === 'string' && query !== '')
+    if (queries.length > 0) return queries.map(firstLine).join(', ')
+  }
   const picked = pickString(args, SUMMARY_KEYS[variant])
   if (picked !== undefined) return firstLine(picked)
   for (const v of Object.values(args)) {
@@ -206,20 +214,23 @@ function deriveBody(variant: ToolRowVariant, argsRaw: string): string | null {
  * @param toolName - wire tool name (dispatch-supplied; survives windowless results).
  * @param block - RunningToolCall or ToolResultNode off the snapshot caches.
  * @param cwd - session workspace root; workspace-rooted path summaries display relative to it.
+ * @param home - host account home; a leftover POSIX home path displays as `~`.
  * @returns the row model.
  */
-export function toolRowModel(toolName: string, block: ToolCallBlock, cwd?: string): ToolRowModel {
+export function toolRowModel(toolName: string, block: ToolCallBlock, cwd?: string, home?: string): ToolRowModel {
   const variant = classifyTool(toolName)
   const done = 'kind' in block
   const argsRaw = (done ? block.call?.argsRaw : block.argsRaw) ?? ''
   const state: ToolRowState = !done ? 'running'
     : block.error?.code === 'interrupted' ? 'stopped'
       : block.isError ? 'error' : 'ok'
-  const base = argsRaw === '' ? block.callId : relativizeToCwd(deriveSummary(variant, argsRaw), cwd)
-  const toolTitle = TOOL_TITLES[toolName]
+  const base = argsRaw === ''
+    ? block.callId
+    : abbreviateHomePath(relativizeToCwd(deriveSummary(variant, argsRaw), cwd), home)
+  const toolTitleKey = TOOL_TITLE_KEYS[toolName]
   // Others keeps the static "Tool call" title (figma literal); the real tool
   // name rides the mutable summary slot unless the tool owns a specific title.
-  const summary = variant === 'others' && toolName !== '' && toolTitle === undefined
+  const summary = variant === 'others' && toolName !== '' && toolTitleKey === undefined
     ? `${toolName} · ${base}`
     : base
   // The empty string is "no text" for both derived result fields: a settled
@@ -229,7 +240,7 @@ export function toolRowModel(toolName: string, block: ToolCallBlock, cwd?: strin
   const errorSummary = state === 'error' && output !== null ? firstLine(output) : null
   return {
     variant,
-    title: toolTitle ?? VARIANT_TITLES[variant],
+    titleKey: toolTitleKey ?? VARIANT_TITLE_KEYS[variant],
     summary,
     filePath: deriveFilePath(variant, argsRaw),
     body: deriveBody(variant, argsRaw),

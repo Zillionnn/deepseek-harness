@@ -9,6 +9,15 @@
   ],
   "references": [
     {
+      "path": "../../api/remotes/tsconfig.client.json"
+    },
+    {
+      "path": "../../api/session-controller/tsconfig.client.json"
+    },
+    {
+      "path": "../../api/workspace-controller/tsconfig.client.json"
+    },
+    {
       "path": "../../attachment/attachment"
     },
     {
@@ -21,37 +30,37 @@
       "path": "../ui-slots"
     },
     {
-      "path": "../ui-attachment"
-    },
-    {
       "path": "../ui-primitives"
     },
     {
-      "path": "../web-react"
+      "path": "../store"
     },
     {
-      "path": "../runtime"
+      "path": "../ui-layout"
     },
     {
-      "path": "../../core/agent"
+      "path": "../ui-renderer"
     },
     {
-      "path": "../../core/tools"
+      "path": "../ui-session"
+    },
+    {
+      "path": "../../core/session"
     },
     {
       "path": "../../interaction/commands"
     },
     {
-      "path": "../../session/session-projection"
-    },
-    {
-      "path": "../../session/session-stats"
-    },
-    {
-      "path": "../../llm/token-meter"
+      "path": "../../llm/llm"
     },
     {
       "path": "../../llm/llm-retry"
+    },
+    {
+      "path": "../../workspace/workspace"
+    },
+    {
+      "path": "../../llm/token-meter"
     },
     {
       "path": "../../plan/plan-mode"
@@ -61,12 +70,6 @@
     },
     {
       "path": "../../todo/tool-todo"
-    },
-    {
-      "path": "../ui-input-trigger"
-    },
-    {
-      "path": "../ui-layout"
     },
     {
       "path": "../locale"
@@ -82,6 +85,12 @@
     },
     {
       "path": "../ui-settings"
+    },
+    {
+      "path": "../../util/crypto"
+    },
+    {
+      "path": "../../util/workspace-path"
     }
   ],
   "exclude": [

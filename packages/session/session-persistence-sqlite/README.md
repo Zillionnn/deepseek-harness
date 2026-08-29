@@ -1,62 +1,191 @@
+---
+description: "SQLite session persistence for deployments and maintainers choosing, configuring, or debugging the opt-in packed-row backend."
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-session-persistence-sqlite
 
 English | [中文](README.zh.md)
 
-A SQLite durable session-persistence backend — a second `SessionPersistence` provider ([session persistence](../../../.agents/notes/implemented/architecture/2026-06-14-session-persistence.md)) satisfying the same contract as `dsh-session-persistence-jsonl` (append-only, contiguous-seq, lazy materialization, interrupted-turn close on load), expressed over `node:sqlite` rows instead of file bytes.
+## Summary
 
-`locate(meta)` returns `undefined`: all sessions share one database, so there is no honest independent per-session transcript path.
+`dsh-session-persistence-sqlite` keeps every session's durable history in a single SQLite database: sessions survive restarts, and the deployment's whole history becomes one queryable file you can back up, inspect with SQL, and analyze — instead of one artifact per session. Choosing it changes nothing for the agent loop, the model, or replay, because it serves the same logical `SessionEvent` stream as the JSONL backend; packing, compression, and recovery are storage-internal details. Choose it when a single queryable database fits the deployment; no shipped composition enables it by default. It is a pre-release provider: it rejects database files it does not own instead of migrating them, and its synchronous Node SQLite driver blocks the JavaScript thread during reads and writes. Setup, sizing, and migration guidance come first; the implementation internals live in a collapsible developer section below.
 
-## Storage model
+## Table of Contents
 
-Each `SessionEvent` maps 1:1 onto a row in an `events` table `(session_id, seq, type, time, data, source_event_seqs, surface_op)` — `data` is the event payload as JSON text, so the row shape is the event verbatim (including `assistant/chunk`, keeping `seq` contiguous). The two `TEXT` columns `source_event_seqs` and `surface_op` are nullable; they store the event's optional surface-metadata fields (see [session surface](../../../.agents/notes/implemented/architecture/2026-06-18-session-surface.md)). Out-of-log metadata (`SessionHeader`), a per-materialization incarnation id, and a monotonic per-log revision live in a `sessions` row; `createdAt` is a non-negative safe integer stored in a strict `INTEGER` column. A singleton state row carries the immutable store id. A `sessions` row is written only by the first `append` — its existence is the lazy-materialization signal (`list` reports exactly the sessions that have a row).
+- [Use this package](#use-this-package)
+- [Understand the implementation](#understand-the-implementation)
+- [Further Exploration](#further-exploration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
-The repository's Node range supports unflagged `node:sqlite`. The database enables foreign keys and uses the configured journal mode (`wal` by default; use a rollback mode where WAL shared-memory files are unsuitable). `PRAGMA application_id` identifies the canonical persistence database, and `PRAGMA user_version` stores its layout version. A fresh database must have no application identity or user-defined schema objects; initialization creates every table and stamps both pragmas in one transaction. Non-pristine unversioned databases, foreign application identities, and every non-current version reject before journal-mode mutation because this unreleased format has no migrations.
+-----
 
-On filesystems with POSIX modes, the backend requests mode `0700` for missing directories and exclusively creates a missing database with mode `0600` before SQLite opens it; the process umask may further restrict both. New WAL, shared-memory, and persistent rollback-journal sidecars receive the database's resulting owner-only mode. Existing directories, database files, and sidecars keep their modes; filesystem setup errors other than an existing database fail initialization. These defaults prevent incidental exposure through a permissive process umask, but do not protect database confidentiality or integrity when another principal can replace the database entry in its parent directory.
+<a id="use-this-package"></a>
+## Use this package
 
-## Contract semantics over rows
+Mount this provider when a composition needs durable sessions backed by SQLite and accepts a process-local, synchronous database driver. The common path is explicit: load the session service, mount the provider, and give it a database path.
 
-- **Append = a transaction.** `append` runs `BEGIN`/`COMMIT` around the batch: it materializes the `sessions` row (if still lazy) and INSERTs every event, asserting the contiguous-seq contract first (the first event's `seq` must equal the stored next-seq). A mid-batch failure (a UNIQUE violation on a duplicated seq) rolls back entirely, so the stored log and the in-memory cursor stay consistent. (`load()` already balanced the stored log, so `append` never has to repair a crash tail.)
-- **Lazy materialization.** `create()` records intent in memory only — no row is written until the first `append`. A created-but-never-appended session has no `sessions` row, so it is absent from `list()` (which reports exactly the sessions that have a row).
-- **Interrupted-turn close on load.** `load()` implements the shared [crash-recovery contract](../../../.agents/notes/implemented/architecture/2026-06-14-session-persistence.md): preserve the valid interrupted turn, append its synthetic closing events in one transaction, and remove only a torn tail row. Committed parse errors or sequence gaps make the session unloadable. Because recovery mutates stored rows, the next append starts from a balanced log and accurate cursor.
-- **Non-mutating inspection.** `inspect()` returns an immutable balanced logical view and may synthesize recovery closers in memory, without deleting a torn tail row, appending recovery rows, or changing the lightweight revision.
-- **Lightweight revisions.** `listSnapshots(signal?)` combines the immutable store and database-file identity, a per-materialization incarnation id, and a per-session counter incremented in each mutating transaction. A full-prefix read captures that revision and its event rows in one read transaction, while `readStoredRevision()` queries only the session row to validate retained preparations. This keeps unchanged observations stable without parsing event rows and distinguishes independent stores and recreated same-id logs. It checks cancellation before and after shared readiness and the synchronous metadata query; the query itself is non-preemptible.
+### When to choose it
 
-## Configuration (schemastery)
+Choose this backend when a local deployment benefits from one queryable database instead of many per-session files. Choose the JSONL backend when consumers need a per-session artifact: this provider returns `undefined` from `locate(meta)`, supports no raw artifacts, and exposes no per-session file. Account for synchronous SQLite and compression work before adopting it for a high-concurrency service.
 
-```ts
-interface Config {
-  path: string   // SQLite database file path, or ':memory:' for an in-process DB
-  journalMode?: 'wal' | 'delete' | 'truncate' | 'persist'   // journal_mode pragma; default 'wal'
-  preparedSessionCacheSize?: number   // positive integer; default 5
-  writeBatchMaxDelayMs?: number   // positive integer; default 200; maximum 2_147_483_647
-}
+### Disk footprint and performance
+
+The packed layout exchanges some SQLite-local latency for a smaller queryable database. On the 501-session comparison corpus, the schema-19 layout used 233.18 MB against the SQLite comparison baseline's 438.31 MB and compressed JSONL's 148.15 MB. Full writes were about 2.3× faster than JSONL and suffix reads remained much faster; complete reads and forks were slightly slower than JSONL. The [persistence latency and page-size decision](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.md) owns the method, complete metrics, and accepted trade-offs.
+
+The disk cost buys a structured, queryable view of session history: external tooling can analyze `sessions` and `events` with SQL, decoding physical rows the way this provider does — the groundwork for features such as built-in full-text search.
+
+### Minimal configuration
+
+Load the session service first, then mount the provider with a database path. Use an absolute path when the location must not depend on the process working directory; relative paths resolve from that directory. `:memory:` is valid for an in-process database whose contents disappear with the process.
+
+```yaml
+- name: '@deepseek-ai/dsh-session'
+- name: '@deepseek-ai/dsh-session-persistence-sqlite'
+  config:
+    path: /absolute/path/to/sessions.db
 ```
 
-## Write path
+| Field | Default | Meaning |
+|---|---|---|
+| `path` | required | SQLite database path, or `:memory:` |
+| `journalMode` | `wal` | Durable journal mode: `wal`, `delete`, `truncate`, or `persist` |
+| `busyTimeoutMs` | `5,000` | Maximum synchronous wait for another connection's lock |
+| `preparedSessionCacheSize` | `5` | Cold session preparations retained for resume reuse |
+| `writeBatchMaxDelayMs` | `200` | Fixed live-event coalescing window, in milliseconds |
 
-Like the JSONL backend, the plugin copies each frozen `session/event` into one controller per live session. The first pending event starts the configured fixed batching window, and later events join without resetting it. Expiry starts one transaction; events admitted during that write form a separately bounded follow-up batch. `session/flush` cancels the wait and drains current and pending batches. The controller persists a fork's seed once, keeps a write cursor so resume never re-appends stored events, and seeds live sessions on apply because HMR does not replay `session/created`. Dispose drains every retained controller before closing the database. Every event remains a separate SQLite row; batching only groups more INSERTs into one transaction and revision increment.
+The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-session-persistence-sqlite) is the exhaustive source for every accepted field and its JSDoc.
 
+### Migrating existing JSONL sessions
+
+There is no built-in migration tool: the JSONL and SQLite stores are separate, and nothing copies sessions between them. Because both backends implement the same logical contract, you can carry a session over with the persistence API — read on the JSONL side, write on the SQLite side. One backend serves `ctx.sessionPersistence` per composition, so run the two halves as separate runs or processes:
+
+```text
+// Export — run against the JSONL composition, per session id:
+const { meta, events } = await ctx.sessionPersistence.load(id)
+
+// Import — run against the SQLite composition, per exported session:
+await ctx.sessionPersistence.create(meta)
+await ctx.sessionPersistence.append(id, events)
+```
+
+`list()` enumerates the materialized sessions to export. The exported events keep contiguous `seq` values starting at 0, so `append` accepts them as one ordered batch into a fresh session; `load` also commits any needed cold repair on the source first, so the exported log is balanced. Treat the migration as a one-time cutover: verify that the imported sessions load, then switch the composition to the SQLite provider. Continuing to write through the old JSONL root afterwards would let the two stores diverge.
+
+### Startup and safe operation
+
+A fresh database initializes directly at schema version 19 with 64 KiB pages. Existing files are never retuned: databases with any other version, a foreign application identity, an unversioned non-pristine schema, or unexpected schema objects are rejected before any data is exposed or changed. This pre-release provider ships no migration. Every statement and fixed pragma comes from packaged `.sql` resources in `resources/sql/`, and runtime values are bound as SQLite parameters, so package code never assembles query text.
+
+Each connection disables SQLite trusted schemas and memory-mapped I/O, verifies the requested journal mode, and pins `synchronous=FULL` so a resolved append remains durable across an OS crash or power loss. On POSIX, the database parent directory and file must belong to the current user, the parent must not be group/world-writable, and the file must grant no group or world permissions; Windows additionally rejects symbolic links and non-regular files, while ACL restriction stays the deployment's job. Path and ownership failures reject plugin initialization; Node's SQLite driver loads lazily on the first persistence operation. Ordinary `create` stays lazy until the first append, while `ensureMaterialized` writes a session metadata row with no event rows.
+
+-----
+
+<a id="understand-the-implementation"></a>
+## Understand the implementation
+
+<details>
+<summary>Implementation internals — click to expand</summary>
+
+This section explains the design decisions behind the provider and points at the code that realizes them; the observable behavior is fully covered in [Use this package](#use-this-package).
+
+### Design philosophy
+
+The provider is built on one separation and three commitments:
+
+- **Logical contract, physical format.** Callers always read and write ordinary `SessionEvent[]`; how rows are packed, stored, and compressed is private to this package.
+- **The schema owns the format.** Schema 19 is a frozen physical contract: a database at another version, with a foreign identity, or with unexpected schema objects is rejected, never migrated. Changing the schema, row codec, page size, or dictionary bytes requires a new schema version.
+- **Durability is the default.** Appends run in immediate transactions with `synchronous=FULL`, and a resolved `append()` means the batch is durable. Normal appends are insert-only: earlier event rows are never rewritten.
+- **Efficiency within strict bounds.** Packing and compression keep the database small, but every limit is a hard format bound — at most 1,024 events and 1 MiB of payload per packed row.
+
+The packed-row foundation lives in the [SQLite physical chunk-row decision](../../../.agents/notes/implemented/architecture/2026-08-18-sqlite-physical-chunk-row-compression.md); the current compression, key, and page-size choices live in the [persistence latency and page-size decision](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.md).
+
+### Source map
+
+| File | Role |
+|---|---|
+| [`src/index.ts`](src/index.ts) | Plugin entry: `Config` schema, service registration, coordinator wiring |
+| [`src/store.ts`](src/store.ts) | Storage primitives: transactional append, reads, repair, path and ownership validation |
+| [`src/schema.ts`](src/schema.ts) | Schema ownership: version gate, connection hardening, row decoding |
+| [`src/codec.ts`](src/codec.ts) | Packing: which `assistant/chunk` runs become packed rows, size bounds |
+| [`src/compression.ts`](src/compression.ts) | Physical encoding: dictionary compression, sequence lists, row scan and decode |
+| [`src/sql.ts`](src/sql.ts) + [`resources/sql/`](resources/sql/) | Every SQL statement as a packaged, closed-name resource |
+| [`src/invariant.ts`](src/invariant.ts) | Invariant companion (no runtime invariant; packing is observable only by database round-trip) |
+
+### Database schema
+
+A fresh database contains three strict tables, defined in [`resources/sql/schema.sql`](resources/sql/schema.sql):
+
+| Table | Purpose |
+|---|---|
+| `persistence_state` | One-row store identity |
+| `sessions` | One row per session: header fields plus a monotonic revision |
+| `events` | Physical event rows: one logical event, or one packed run |
+
+The exact columns live in [`resources/sql/schema.sql`](resources/sql/schema.sql). `sessions.id` is an internal integer key while `sessions.session_key` retains the public session id. `events.data` holds text or an independently decodable Zstandard blob; compression uses the schema-owned shared dictionary only when the result is smaller. `events.source_event_seqs` uses tagged delta or run encoding. `events.is_packed` is `0` for a scalar logical event and `1` for a packed chunk run, so a scalar event whose type matches a physical chunk tag remains unambiguous. Packed rows reuse the `seq` of their first logical event, so under the composite `(session_id, seq)` primary key physical order is logical order.
+
+### Write path
+
+Each append takes an immediate transaction, re-validates schema ownership, checks the stored tail so a stale writer cannot extend the log, packs only the new batch, inserts its rows, bumps the session revision once, and commits. The coordinator coalesces live events for the configured window, so high-frequency streams produce larger packed runs while physical writes stay proportional to newly durable batches.
+
+### Read and recovery
+
+A full read locates the last valid `turn/end` in a reverse pass, then decodes each physical row into its logical events in forward order, rejecting gaps or malformed rows in the committed prefix. A malformed final row is treated as a torn tail: a mutating load may delete it under the write lock and close the log with synthetic closers. Suffix reads (`readFrom`) examine only the physical span that may contain the requested sequence, so they never parse unrelated earlier rows.
+
+</details>
+
+-----
+
+<a id="further-exploration"></a>
+## Further Exploration
+
+Read these pages when the package-level contract is not enough. They move from the shared persistence model to exhaustive configuration and the decision evidence behind the physical layout.
+
+- [Session persistence subsystem](../../../docs/subsystems/persistence.md) — backend-neutral service semantics and provider relationships.
+- [Session package map](../README.md) — adjacent persistence, projection, title, and telemetry packages.
+- [Generated configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-session-persistence-sqlite) — every accepted config field and its source declaration.
+- [SQLite physical chunk-row decision](../../../.agents/notes/implemented/architecture/2026-08-18-sqlite-physical-chunk-row-compression.md) — rationale, alternatives, and measurements behind the packed layout.
+- [Persistence latency and page-size decision](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.md) — the 501-session benchmark and schema-19 storage trade-offs.
+
+-----
+
+<a id="model-experience"></a>
 ## Model Experience
 
 ### Resumed conversation history
 
 #### What the model sees
 
-SQLite storage contributes no live prompt or schema. Loading restores the same surface history as JSONL and preserves prior headers for reconstruction; the new loop composes its current envelope. Recovery balances an assistant request without a durable call with `TOOL_NOT_STARTED`; a durable call without a result becomes `TOOL_OUTCOME_UNKNOWN`, which tells the model to retry only read-only or idempotent work and to verify possible side effects or ask the user. Row metadata and raw chunks are not messages.
+Nothing specific to SQLite. Resume restores the same logical events and derived messages as the JSONL backend; physical packed tags never reach prompts, tools, replay, or live `session/event` delivery.
 
 #### Token effect
 
-Zero live-request tokens. Resume restores retained history and pays the current envelope, plus the quoted repair result for each interrupted call.
+Zero live-request tokens. Resume pays only for the retained logical history and the current request envelope.
 
 #### KV Cache effect
 
-SQLite storage does not mutate live request prefixes. A resumed loop can reuse provider cache only when its reconstructed history, current envelope, and model route match; crash-repair results append.
+Physical packing does not mutate request prefixes. Provider cache reuse depends on the reconstructed history, current envelope, and model route exactly as with other persistence backends.
 
 ## Known Limitations and Deferred Work
 
-- **`DatabaseSync` is synchronous** — every append transaction blocks the event loop for its duration; acceptable for local stores, a throughput ceiling for busy multi-session servers.
-- **Write contention has no wait or retry policy** — the backend sets no busy timeout and retries no locked-database error, so another connection holding a write transaction makes the operation reject immediately.
-- **Only a pristine new database or the current owned `SCHEMA_VERSION` opens** — unversioned schema objects, foreign application identities, and every other schema version are rejected rather than migrated (unreleased software; no persisted user data to preserve).
-- **Nothing deletes stored sessions** — rows accumulate until removed externally (the seam has no deletion API; `ON DELETE CASCADE` is wired for such out-of-band cleanup).
-- **TODO:** this backend talks to `node:sqlite` directly. If a cordis database service (`cordis/db` / a `@cordisjs` SQL driver plugin) is adopted, route through that instead of holding a raw `DatabaseSync` here — the contract surface (`SessionPersistence`) would not change, only the storage driver.
+<a id="known-limitations-and-deferred-work"></a>
+
+
+These limits define when the provider is a poor fit or needs special operational care. They are current package constraints, not a general SQLite comparison or a task backlog.
+
+- **Pre-release design with no migration** — schema 19 is an interim SQLite-only design; neither schema stability nor migration support is guaranteed.
+- **Packing depends on batch boundaries** — a compatible run split by the write-behind window or an explicit flush stays split across physical rows; this avoids rewriting prior rows at the cost of a timing-dependent packing ratio.
+- **Synchronous SQLite and compression** — Node's SQLite driver and Zstandard calls block the JavaScript thread.
+- **Busy waits block the event loop** — SQLite waits inside synchronous calls; a competing writer can stall the thread for up to the configured `busyTimeoutMs`.
+- **External SQL readers must decode physical rows** — a packed `events.type` (`text-chunks`, `reasoning-chunks`, `tool-call-chunks`) is not a logical event type; supported consumers read through this provider.
+- **No deletion or historical compaction** — normal appends are insert-only and nothing removes old rows.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+The 501-session corpus contains private session data and is not committed. Its aggregate method, complete results, and rejected candidates are recorded in the [persistence latency and page-size decision](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.md); the packaged dictionary's hash-pinned resource is the schema-19 source of truth.
+
+</details>
